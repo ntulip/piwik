@@ -1,0 +1,167 @@
+<?php
+/**
+ * Piwik - Open source web analytics
+ * 
+ * @link http://piwik.org
+ * @license http://www.gnu.org/licenses/gpl-3.0.html Gpl v3 or later
+ * @version $Id: GenerateGraphHTML.php 1442 2009-08-26 19:04:53Z vipsoft $
+ * 
+ * @category Piwik
+ * @package Piwik
+ */
+
+/**
+ * This class generates the HTML code to embed to flash graphs in the page.
+ * It doesn't call the API but simply prints the html snippet.
+ * 
+ * @package Piwik
+ * @subpackage Piwik_ViewDataTable
+ */
+abstract class Piwik_ViewDataTable_GenerateGraphHTML extends Piwik_ViewDataTable
+{	
+	protected $width = '100%'; 
+	protected $height = 250;
+	protected $graphType = 'standard';
+	
+	/**
+	 * @see Piwik_ViewDataTable::init()
+	 */
+	function init($currentControllerName,
+						$currentControllerAction, 
+						$apiMethodToRequestDataTable )
+	{
+		parent::init($currentControllerName,
+						$currentControllerAction, 
+						$apiMethodToRequestDataTable );
+
+		$this->dataTableTemplate = 'CoreHome/templates/graph.tpl';
+		
+		$this->disableOffsetInformation();
+		$this->disableExcludeLowPopulation();
+		$this->disableSearchBox();
+		$this->enableShowExportAsImageIcon();
+		
+		$this->parametersToModify = array( 
+						'viewDataTable' => $this->getViewDataTableIdToLoad(),
+						// in the case this controller is being executed by another controller
+						// eg. when being widgetized in an IFRAME
+						// we need to put in the URL of the graph data the real module and action
+						'module' => $currentControllerName, 
+						'action' => $currentControllerAction,
+		);
+	}
+	
+	public function enableShowExportAsImageIcon()
+	{
+		$this->viewProperties['show_export_as_image_icon'] = true;
+	}
+	
+	/**
+	 * Sets parameters to modify in the future generated URL
+	 * @param array $array array('nameParameter' => $newValue, ...)
+	 */
+	public function setParametersToModify($array)
+	{
+		$this->parametersToModify = array_merge($this->parametersToModify, $array);
+	}
+	
+	/**
+	 * We persist the parametersToModify values in the javascript footer.
+	 * This is used by the "export links" that use the "date" attribute from the json properties array in the datatable footer.
+	 */
+	protected function getJavascriptVariablesToSet()
+	{
+		return $this->parametersToModify + parent::getJavascriptVariablesToSet();
+	}
+	
+	/**
+	 * @see Piwik_ViewDataTable::main()
+	 */
+	public function main()
+	{
+		if($this->mainAlreadyExecuted)
+		{
+			return;
+		}
+		$this->mainAlreadyExecuted = true;
+		
+		$this->view = $this->buildView();
+	}
+	
+	protected function buildView()
+	{
+		$view = new Piwik_View($this->dataTableTemplate);
+		$this->uniqueIdViewDataTable = $this->getUniqueIdViewDataTable();
+		$view->graphType = $this->graphType;
+		$this->chartDivId = $this->uniqueIdViewDataTable . "Chart_swf";
+
+		$this->parametersToModify['action'] = $this->currentControllerAction;
+		$this->parametersToModify = array_merge($this->variablesDefault, $this->parametersToModify);
+		
+		$url = Piwik_Url::getCurrentQueryStringWithParametersModified($this->parametersToModify);
+		$view->jsInvocationTag = $this->getFlashInvocationCode($url);
+		$view->urlGraphData = $url;
+		$view->chartDivId = $this->chartDivId;
+		$view->formEmbedId = "formEmbed".$this->uniqueIdViewDataTable;
+		$view->javascriptVariablesToSet = $this->getJavascriptVariablesToSet();
+		$view->properties = $this->getViewProperties();
+		return $view;
+	}
+	
+	protected function getFlashInvocationCode( $url = 'libs/open-flash-chart/data-files/nodata.txt' )
+	{ 
+		$width = $this->width; 
+		$height = $this->height; 
+
+		$pathToLibraryOpenChart = 'libs/open-flash-chart/';
+		$pathToLibrarySwfObject = 'libs/swfobject/';
+	
+		$url = 'index.php' . $url;
+		// escape the & and stuff:
+		$url = str_replace(array('[', ']'), array('%5B', '%5D'), $url);
+		$url = urlencode($url);
+
+		$requiredFlashVersion = "9.0.0";
+		
+		// - Export as Image feature from Open Flash Chart
+		// - Using library for auto-enabling Flash object on IE, disabled-Javascript proof
+		$return = '
+			<div><div id="'. $this->chartDivId .'">
+				Displaying Graphs in Piwik requires Flash >= '. $requiredFlashVersion .'. <a target="_blank" href="misc/redirectToUrl.php?url='. urlencode('http://piwik.org/faq/troubleshooting/#faq_53') .'">More information about displaying graphs in Piwik.</a>
+			</div></div>
+			<script type="text/javascript">
+				OFC = {};
+				OFC.jquery = {
+					name: "jQuery",
+					rasterize: function (src, dst) { $("#"+ dst).replaceWith(Control.OFC.image(src)); },
+					image: function (src) { return \'<img title="Piwik Graph" src="data:image/png;base64,\' + $("#"+src)[0].get_img_binary() + \'" />\'; },
+					popup: function (src) {
+						var img_win = window.open("", "ExportChartAsImage");
+						img_win.document.write("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\" /><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" /><title>'. Piwik_Translate('General_ExportAsImage') .'</title></head><body>" + Control.OFC.image(src) + "<br /><br /><p>'. htmlentities(Piwik_Translate('General_SaveImageOnYourComputer')) .'</p></body></html>");
+					}
+				};
+				if (typeof Control == "undefined") { var Control = {OFC: OFC.jquery}; }
+
+				// By default, right-clicking on OFC and choosing "save image locally" calls this function.
+				function save_image() { OFC.jquery.popup("'. $this->chartDivId .'"); }
+
+				swfobject.embedSWF(
+					"'. $pathToLibraryOpenChart .'open-flash-chart.swf?piwik='. Piwik_Version::VERSION .'",
+					"'. $this->chartDivId .'",
+					"'. $width . '", "' . $height . '",
+					"'. $requiredFlashVersion .'",
+					"'. $pathToLibrarySwfObject .'expressInstall.swf",
+					{
+						"data-file":"'. $url .'",
+						"loading":"'. htmlspecialchars(Piwik_Translate('General_Loading')) .'"
+					},
+					{
+						"allowScriptAccess":"always",
+						"wmode":"opaque"
+					}, 
+					{"bgcolor":"#FFFFFF"}
+				);
+			</script>';
+		return $return;
+	}
+}
